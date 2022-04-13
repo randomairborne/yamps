@@ -5,7 +5,7 @@ use oncecell::OnceCell;
 static DB: OnceCell<sqlx::Pool<sqlx::Postgres>> = OnceCell::new();
 
 #[macro_use]
-use sqlx;
+extern crate sqlx;
 
 #[derive(serde::Deserialize)]
 struct Config {
@@ -25,13 +25,13 @@ async fn main() {
         .max_connections(5)
         .connect(config.db)
         .await?;
-    migrate!("migrations").run(&pool).await?;
+    migrate!("migrations").run(&pool).await.unwrap();
     let app = axum::Router::new()
         .route("/", get(root))
         .route("/:path", get(getpaste))
         .route("/submit", post(submit));
     tokio::spawn(async move {delete_expired().await});
-    axum::Server::bind(std::net::SocketAddr::from(([127, 0, 0, 1], config.port)))
+    axum::Server::bind(&std::net::SocketAddr::from(([127, 0, 0, 1], config.port)))
         .serve(app.into_make_service())
         .with_graceful_shutdown(async {
             tokio::signal::ctrl_c()
@@ -44,11 +44,13 @@ async fn main() {
 
 static_file!(root, "root.html", axum_static_file::content_types::HTML);
 
-async fn submit(RequestParts(req): RequestParts) {
+async fn submit(RequestParts(req): RequestParts<B> {
     let persistence_length = chrono::Duration::weeks(1);
-    let expired = chrono::offset::Local::now().checked_add_signed().ok_or(Err((axum::http::StatusCode::INTERNAL_SERVER_ERROR, r#"{"error": "This should not have happened"}"#)))?;
+    let expired = chrono::offset::Local::now().checked_add_signed().ok_or(Err((axum::http::StatusCode::INTERNAL_SERVER_ERROR, r#"{"error": "This should not have happened"}"#.to_string())))?;
     let key = random_string::generate(8, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz1234567890-");
-    sqlx::query!("INSERT INTO pastes VALUES ($1, $2, $3)", key, req.body(), expires)
+    // TODO error check this
+    sqlx::query!("INSERT INTO pastes VALUES ($1, $2, $3)", key, req.body(), expires).execute().await.unwrap()
+    Ok((axum::http::StatusCode::OK, format!("{{\"message\": \"Paste submitted!\", \"id\": \"{}\"}}", key)))
 }
 
 async fn getpaste(Path(id): Path<String>) {
@@ -56,5 +58,9 @@ async fn getpaste(Path(id): Path<String>) {
 }
 
 async fn delete_expired() {
+    
+}
+
+enum Error {
     
 }

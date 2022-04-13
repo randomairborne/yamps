@@ -5,7 +5,7 @@ authors = ["valkyrie_pilot <valk@randomairborne.dev>"]
 edition = "2021"
 description = "Simple pastebin website. Made for minecraft logs, supports anything."
 readme = "README.md"
-respository = "https://github.com/randomairborne/yamps"
+repository = "https://github.com/randomairborne/yamps"
 license = "MIT"
 
 [dependencies]
