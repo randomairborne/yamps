@@ -94,6 +94,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "axum-macros"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "63bcb0d395bc5dd286e61aada9fc48201eb70e232f006f9d6c330c9db2f256f5"
+dependencies = [
+ "heck 0.4.0",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "axum_static_macro"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -401,6 +413,12 @@ checksum = "6d621efb26863f0e9924c6ac577e8275e5e6b77455db64ffa6c65c904e9e132c"
 dependencies = [
  "unicode-segmentation",
 ]
+
+[[package]]
+name = "heck"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2540771e65fc8cb83cd6e8a237f70c319bd5c29f78ed1084ba5d50eeac86f7f9"
 
 [[package]]
 name = "hermit-abi"
@@ -1153,7 +1171,7 @@ checksum = "eee35713129561f5e55c554bba1c378e2a7e67f81257b7311183de98c50e6f94"
 dependencies = [
  "dotenv",
  "either",
- "heck",
+ "heck 0.3.3",
  "once_cell",
  "proc-macro2",
  "quote",
@@ -1709,6 +1727,7 @@ name = "yet_another_minecraft_paste_site"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "axum-macros",
  "axum_static_macro",
  "chrono",
  "once_cell",
