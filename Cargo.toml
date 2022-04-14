@@ -9,8 +9,8 @@ repository = "https://github.com/randomairborne/yamps"
 license = "MIT"
 
 [dependencies]
-axum = { version = "0.5", features = ["http2"] }
-axum_static_macro = { path = "../axum_static_macro" }
+axum = { version = "0.5", features = ["http2", "multipart"] }
+axum_static_macro = "1.1"
 chrono = "0.4"
 once_cell = "1.10"
 random-string = "1"
@@ -20,7 +20,6 @@ tokio = { version = "1.0", features = ["rt-multi-thread", "full"] }
 toml = "0.5"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-axum-macros = "*"
 
 [profile.dev.package.sqlx-macros]
 opt-level = 3

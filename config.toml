@@ -1,2 +1,2 @@
 db = "postgres://yamps:password@localhost/yamps"
-port = 3000
+port = 80

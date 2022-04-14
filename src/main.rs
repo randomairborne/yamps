@@ -1,4 +1,4 @@
-use axum::extract::{Json, Path};
+use axum::extract::{ContentLengthLimit, Multipart, Path};
 use axum::routing::{get, post};
 use once_cell::sync::OnceCell;
 
@@ -15,6 +15,9 @@ struct Config {
 
 #[tokio::main]
 async fn main() {
+   tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_env("LOG"))
+        .init();
     let cfg_path = std::env::args()
         .nth(1)
         .unwrap_or_else(|| String::from("./config.toml"));
@@ -33,7 +36,7 @@ async fn main() {
         .route("/:path", get(getpaste))
         .route("/submit", post(submit));
     tokio::spawn(async move { delete_expired().await });
-    axum::Server::bind(&std::net::SocketAddr::from(([127, 0, 0, 1], config.port)))
+    axum::Server::bind(&std::net::SocketAddr::from(([0, 0, 0, 0], config.port)))
         .serve(app.into_make_service())
         .await
         .expect("Failed to bind to address, is something else using the port?");
@@ -41,30 +44,34 @@ async fn main() {
 
 axum_static_macro::static_file!(root, "index.html", axum_static_macro::content_types::HTML);
 
-async fn submit(Json(req): Json<NewPaste>) -> Result<(axum::http::StatusCode, String), Error> {
+async fn submit(
+    mut multipart: ContentLengthLimit<Multipart, 50_000_000>,
+) -> Result<(axum::http::StatusCode, String), Error> {
+    let mut data = String::new();
+    while let Some(field) = multipart.0.next_field().await.unwrap() {
+        if field.name().ok_or(Error::FieldInvalid)? == "Contents" {
+            data = field.text().await?;
+            break;
+        }
+    }
     let persistence_length = chrono::Duration::weeks(1);
     let expires = chrono::offset::Local::now()
         .checked_add_signed(persistence_length)
         .ok_or(Error::TimeError)?;
     let key = random_string::generate(
         8,
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz1234567890-",
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz1234567890",
     );
     let db = DB.get().ok_or_else(|| Error::NoDb)?;
-    query!(
-        "INSERT INTO pastes VALUES ($1, $2, $3)",
-        key,
-        req.contents,
-        expires
-    )
-    .execute(db)
-    .await?;
+    query!("INSERT INTO pastes VALUES ($1, $2, $3)", key, data, expires)
+        .execute(db)
+        .await?;
     Ok((
         axum::http::StatusCode::OK,
         format!("{{\"message\": \"Paste submitted!\", \"id\": \"{}\"}}", key),
     ))
 }
-#[axum_macros::debug_handler]
+
 async fn getpaste(
     Path(id): Path<String>,
 ) -> Result<(axum::http::StatusCode, axum::http::HeaderMap, String), Error> {
@@ -88,13 +95,16 @@ async fn getpaste(
         }
         Err(e) => return Err(Error::Sqlx(e)),
     };
-    println!("{:#?}", res);
     let mut headers = axum::http::HeaderMap::new();
     headers.insert(
         axum::http::header::CONTENT_TYPE,
         axum::http::header::HeaderValue::from_static("text/html"),
     );
-    Ok((axum::http::StatusCode::OK, headers, "".to_string()))
+    Ok((
+        axum::http::StatusCode::OK,
+        headers,
+        res.contents.ok_or(Error::InternalError)?,
+    ))
 }
 
 async fn delete_expired() {
@@ -115,18 +125,15 @@ async fn delete_expired() {
     }
 }
 
-#[derive(serde::Deserialize, Debug, Clone)]
-struct NewPaste {
-    contents: String,
-}
 
 enum Error {
     // Errors
     TimeError,
     NoDb,
     Sqlx(sqlx::Error),
-
-    // Expected errors
+    Multipart(axum::extract::multipart::MultipartError),
+    FieldInvalid,
+    InternalError,
 }
 
 impl From<sqlx::Error> for Error {
@@ -135,34 +142,38 @@ impl From<sqlx::Error> for Error {
     }
 }
 
+impl From<axum::extract::multipart::MultipartError> for Error {
+    fn from(e: axum::extract::multipart::MultipartError) -> Self {
+        Self::Multipart(e)
+    }
+}
+
 impl axum::response::IntoResponse for Error {
     fn into_response(self) -> axum::response::Response {
-        let (body, status, content_type): (
-            std::borrow::Cow<str>,
-            axum::http::StatusCode,
-            &'static str,
-        ) = match self {
-            Error::TimeError => (
-                r#"{"error":"Bad request"}"#.into(),
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                "application/json",
-            ),
+        let (body, status): (std::borrow::Cow<str>, axum::http::StatusCode) = match self {
+            Error::TimeError => ("Bad request".into(), axum::http::StatusCode::BAD_REQUEST),
             Error::NoDb => (
-                r#"{"error":"Database connection failed"}"#.into(),
+                "Database connection failed".into(),
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                "application/json",
+            ),
+            Error::FieldInvalid => (
+                "HTTP field invalid".into(),
+                axum::http::StatusCode::BAD_REQUEST,
+            ),
+            Error::InternalError => (
+                "Unknown internal error".into(),
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             ),
             Error::Sqlx(_) => (
-                r#"{"error":"Database lookup failed"}"#.into(),
+                "Database lookup failed".into(),
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                "application/json",
+            ),
+            Error::Multipart(_) => (
+                "MultiPartFormData invalid".into(),
+                axum::http::StatusCode::BAD_REQUEST,
             ),
         };
         axum::response::Response::builder()
-            .header(
-                axum::http::header::CONTENT_TYPE,
-                axum::http::header::HeaderValue::from_static(content_type),
-            )
             .status(status)
             .body(axum::body::boxed(axum::body::Full::from(body)))
             .unwrap()
