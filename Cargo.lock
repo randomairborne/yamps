@@ -108,8 +108,6 @@ dependencies = [
 [[package]]
 name = "axum_static_macro"
 version = "1.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "856bdc35065d751b7e48b0b3b638736f64cd2b3de56d73c8d7a69ac940800c5d"
 
 [[package]]
 name = "base64"

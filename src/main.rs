@@ -39,7 +39,7 @@ async fn main() {
         .expect("Failed to bind to address, is something else using the port?");
 }
 
-axum_static_macro::static_file!(root, "index.html", "text/html");
+axum_static_macro::static_file!(root, "index.html", axum_static_macro::content_types::HTML);
 
 async fn submit(Json(req): Json<NewPaste>) -> Result<(axum::http::StatusCode, String), Error> {
     let persistence_length = chrono::Duration::weeks(1);
