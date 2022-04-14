@@ -1,5 +1,5 @@
 use axum::extract::{ContentLengthLimit, Multipart, Path};
-use axum::routing::{get, post};
+use axum::routing::get;
 use once_cell::sync::OnceCell;
 
 static DB: OnceCell<sqlx::Pool<sqlx::Postgres>> = OnceCell::new();
@@ -15,7 +15,7 @@ struct Config {
 
 #[tokio::main]
 async fn main() {
-   tracing_subscriber::fmt()
+    tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_env("LOG"))
         .init();
     let cfg_path = std::env::args()
@@ -32,9 +32,8 @@ async fn main() {
     migrate!("./migrations").run(&pool).await.unwrap();
     DB.set(pool).expect("Failed to set OnceCell");
     let app = axum::Router::new()
-        .route("/", get(root))
-        .route("/:path", get(getpaste))
-        .route("/submit", post(submit));
+        .route("/", get(root).post(submit))
+        .route("/:path", get(getpaste));
     tokio::spawn(async move { delete_expired().await });
     axum::Server::bind(&std::net::SocketAddr::from(([0, 0, 0, 0], config.port)))
         .serve(app.into_make_service())
@@ -46,10 +45,10 @@ axum_static_macro::static_file!(root, "index.html", axum_static_macro::content_t
 
 async fn submit(
     mut multipart: ContentLengthLimit<Multipart, 50_000_000>,
-) -> Result<(axum::http::StatusCode, String), Error> {
+) -> Result<(axum::http::StatusCode, axum::http::HeaderMap, String), Error> {
     let mut data = String::new();
     while let Some(field) = multipart.0.next_field().await.unwrap() {
-        if field.name().ok_or(Error::FieldInvalid)? == "Contents" {
+        if field.name().ok_or(Error::FieldInvalid)? == "contents" {
             data = field.text().await?;
             break;
         }
@@ -63,12 +62,19 @@ async fn submit(
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz1234567890",
     );
     let db = DB.get().ok_or_else(|| Error::NoDb)?;
+    // TODO check if paste already exists
     query!("INSERT INTO pastes VALUES ($1, $2, $3)", key, data, expires)
         .execute(db)
         .await?;
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        axum::http::header::LOCATION,
+        axum::http::header::HeaderValue::from_str(&format!("/{}", key))?,
+    );
     Ok((
-        axum::http::StatusCode::OK,
-        format!("{{\"message\": \"Paste submitted!\", \"id\": \"{}\"}}", key),
+        axum::http::StatusCode::FOUND,
+        headers,
+        "Paste submitted!".to_string(),
     ))
 }
 
@@ -125,15 +131,21 @@ async fn delete_expired() {
     }
 }
 
-
 enum Error {
     // Errors
     TimeError,
     NoDb,
-    Sqlx(sqlx::Error),
-    Multipart(axum::extract::multipart::MultipartError),
     FieldInvalid,
     InternalError,
+    InvalidHeaderValue(axum::http::header::InvalidHeaderValue),
+    Sqlx(sqlx::Error),
+    Multipart(axum::extract::multipart::MultipartError),
+}
+
+impl From<axum::http::header::InvalidHeaderValue> for Error {
+    fn from(e: axum::http::header::InvalidHeaderValue) -> Self {
+        Self::InvalidHeaderValue(e)
+    }
 }
 
 impl From<sqlx::Error> for Error {
@@ -162,6 +174,10 @@ impl axum::response::IntoResponse for Error {
             ),
             Error::InternalError => (
                 "Unknown internal error".into(),
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            ),
+            Error::InvalidHeaderValue(_) => (
+                "Invalid redirect value (this should be impossible".into(),
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             ),
             Error::Sqlx(_) => (

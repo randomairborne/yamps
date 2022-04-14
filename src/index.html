@@ -3,9 +3,14 @@
 
 </head>
 <body>
-	<form action="/submit">
-		<input placeholder="Destination" id="new-link-dst" size="50" />
-		<button>Paste</button>
+	<form action="/" method="POST" enctype="multipart/form-data">
+                <div>
+			<label for="contents"></label>
+			<input placeholder="Contents" id="contents" size="50" />
+		</div>
+		<div>
+			<button>Paste</button>
+		</div>
 	</form>
 
 </body>
