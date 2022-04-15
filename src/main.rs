@@ -135,6 +135,7 @@ async fn getpaste(
 
 async fn delete_expired() {
     loop {
+        info!("Deleting old pastes...");
         let db = match DB.get() {
             Some(db) => db,
             None => continue,
@@ -147,7 +148,7 @@ async fn delete_expired() {
             Ok(_) => {}
             Err(e) => tracing::error!("Error deleting expired pastes: {}", e),
         };
-        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
     }
 }
 
