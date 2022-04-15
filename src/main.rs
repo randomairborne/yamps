@@ -1,18 +1,23 @@
 use axum::extract::{ContentLengthLimit, Multipart, Path};
 use axum::routing::get;
-use once_cell::sync::OnceCell;
-
-static DB: OnceCell<sqlx::Pool<sqlx::Postgres>> = OnceCell::new();
+use axum::Extension;
 
 #[macro_use]
 extern crate sqlx;
 #[macro_use]
 extern crate tracing;
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, Clone, Debug)]
 struct Config {
     db: String,
     port: u16,
+    dmca_email: String,
+}
+
+#[derive(Clone, Debug)]
+struct State {
+    config: Config,
+    db: sqlx::PgPool,
 }
 
 #[tokio::main]
@@ -32,11 +37,20 @@ async fn main() {
         .await
         .expect("Failed to connect to database!");
     migrate!("./migrations").run(&pool).await.unwrap();
-    DB.set(pool).expect("Failed to set OnceCell");
+    let state = State {
+        config: config.clone(),
+        db: pool,
+    };
+    let app_state = state.clone();
+    let deleter_state = state.clone();
     let app = axum::Router::new()
-        .route("/", get(root).post(submit))
-        .route("/:path", get(getpaste));
-    tokio::spawn(async move { delete_expired().await });
+        .route(
+            "/",
+            get(root).post(move |multipart| submit(multipart, app_state)),
+        )
+        .route("/:path", get(getpaste))
+        .layer(Extension(state));
+    tokio::spawn(async move { delete_expired(&deleter_state.db).await });
     warn!("Listening on http://0.0.0.0:{} (http)", config.port);
     axum::Server::bind(&std::net::SocketAddr::from(([0, 0, 0, 0], config.port)))
         .serve(app.into_make_service())
@@ -48,6 +62,7 @@ axum_static_macro::static_file!(root, "index.html", axum_static_macro::content_t
 
 async fn submit(
     mut multipart: ContentLengthLimit<Multipart, 50_000_000>,
+    state: State,
 ) -> Result<(axum::http::StatusCode, axum::http::HeaderMap, String), Error> {
     let mut data = String::new();
     while let Some(field) = multipart.0.next_field().await? {
@@ -65,7 +80,7 @@ async fn submit(
         8,
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz1234567890",
     );
-    let db = DB.get().ok_or_else(|| Error::NoDb)?;
+    let db = &state.db;
     // TODO check if paste already exists
     let contents = html_escape::encode_text(&data);
     query!(
@@ -92,8 +107,9 @@ async fn submit(
 // TODO implement caching
 async fn getpaste(
     Path(id): Path<String>,
+    Extension(state): Extension<State>,
 ) -> Result<(axum::http::StatusCode, axum::http::HeaderMap, String), Error> {
-    let db = DB.get().ok_or_else(|| Error::NoDb)?;
+    let db = &state.db;
     let res = match query!("SELECT contents FROM pastes WHERE key = $1", id)
         .fetch_one(db)
         .await
@@ -120,27 +136,22 @@ async fn getpaste(
     );
     let contents = res.contents.ok_or(Error::InternalError)?;
     #[cfg(not(debug_assertions))]
-    let header = include_str!("./paste_head.html").to_string();
+    let html = include_str!("./paste.html").to_string();
     #[cfg(debug_assertions)]
-    let header = tokio::fs::read_to_string("./src/paste_head.html")
+    let html = tokio::fs::read_to_string("./src/paste.html")
         .await
-        .expect("Program is in debug mode and the header file was not found!");
+        .expect("Program is in debug mode and the paste.html file was not found!");
     // This has both \n and \r\n to normalize for HTTP weirdness
-    let html_contents = contents.replace("\r\n", "<br>").replace("\n", "<br>");
-    Ok((
-        axum::http::StatusCode::OK,
-        headers,
-        format!("{}{}</div></body></html>", header, html_contents),
-    ))
+    let clean_contents = contents.replace("\r\n", "<br>").replace("\n", "<br>");
+    let final_contents = html
+        .replace("%{dmca_email}%", &state.config.dmca_email)
+        .replace("%{paste_contents}%", &clean_contents);
+    Ok((axum::http::StatusCode::OK, headers, final_contents))
 }
 
-async fn delete_expired() {
+async fn delete_expired(db: &sqlx::PgPool) {
     loop {
         info!("Deleting old pastes...");
-        let db = match DB.get() {
-            Some(db) => db,
-            None => continue,
-        };
         let now: chrono::DateTime<chrono::Local> = chrono::Local::now();
         match query!("DELETE FROM pastes WHERE expires < $1", now)
             .execute(db)
@@ -157,7 +168,6 @@ async fn delete_expired() {
 enum Error {
     // Errors
     TimeError,
-    NoDb,
     FieldInvalid,
     InternalError,
     InvalidHeaderValue(axum::http::header::InvalidHeaderValue),
@@ -187,10 +197,6 @@ impl axum::response::IntoResponse for Error {
     fn into_response(self) -> axum::response::Response {
         let (body, status): (std::borrow::Cow<str>, axum::http::StatusCode) = match self {
             Error::TimeError => ("Bad request".into(), axum::http::StatusCode::BAD_REQUEST),
-            Error::NoDb => (
-                "Database connection failed".into(),
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            ),
             Error::FieldInvalid => (
                 "HTTP field invalid".into(),
                 axum::http::StatusCode::BAD_REQUEST,

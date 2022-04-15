@@ -1776,7 +1776,6 @@ dependencies = [
  "axum_static_macro",
  "chrono",
  "html-escape",
- "once_cell",
  "random-string",
  "serde",
  "sqlx",
