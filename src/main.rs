@@ -89,6 +89,7 @@ async fn submit(
     ))
 }
 
+// TODO implement caching
 async fn getpaste(
     Path(id): Path<String>,
 ) -> Result<(axum::http::StatusCode, axum::http::HeaderMap, String), Error> {
