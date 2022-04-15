@@ -6,6 +6,8 @@ static DB: OnceCell<sqlx::Pool<sqlx::Postgres>> = OnceCell::new();
 
 #[macro_use]
 extern crate sqlx;
+#[macro_use]
+extern crate tracing;
 
 #[derive(serde::Deserialize)]
 struct Config {
@@ -35,6 +37,7 @@ async fn main() {
         .route("/", get(root).post(submit))
         .route("/:path", get(getpaste));
     tokio::spawn(async move { delete_expired().await });
+    warn!("Listening on http://0.0.0.0:{} (http)", config.port);
     axum::Server::bind(&std::net::SocketAddr::from(([0, 0, 0, 0], config.port)))
         .serve(app.into_make_service())
         .await
@@ -47,7 +50,8 @@ async fn submit(
     mut multipart: ContentLengthLimit<Multipart, 50_000_000>,
 ) -> Result<(axum::http::StatusCode, axum::http::HeaderMap, String), Error> {
     let mut data = String::new();
-    while let Some(field) = multipart.0.next_field().await.unwrap() {
+    while let Some(field) = multipart.0.next_field().await? {
+        debug!("{:?}", field);
         if field.name().ok_or(Error::FieldInvalid)? == "contents" {
             data = field.text().await?;
             break;
@@ -131,6 +135,7 @@ async fn delete_expired() {
     }
 }
 
+#[derive(Debug)]
 enum Error {
     // Errors
     TimeError,
@@ -189,6 +194,7 @@ impl axum::response::IntoResponse for Error {
                 axum::http::StatusCode::BAD_REQUEST,
             ),
         };
+        error!("{:?}", self);
         axum::response::Response::builder()
             .status(status)
             .body(axum::body::boxed(axum::body::Full::from(body)))

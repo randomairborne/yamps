@@ -1,17 +1,57 @@
-<html>
+<!DOCTYPE html>
+<html lang="en">
+
 <head>
+	<link href="https://fonts.googleapis.com/css?family=JetBrains+Mono&display=swap" rel="preload" as="style" />
+	<link href="https://fonts.googleapis.com/css?family=JetBrains+Mono&display=swap" rel="stylesheet" />
+	<meta charset="UTF-8">
+	<title>404 not found</title>
+	<style>
 
+body {
+			background: #44484a;
+			display: flex;
+			justify-content: center;
+			align-items: center;
+			color: #43baf4;
+			font-family: "JetBrains Mono", monospace;
+		}
+
+
+		textarea {
+			background: hsl(192, 2%, 40%);
+			border: #1b8b77;
+			color: #ffffff;
+			padding: 15px;
+			border-radius: 2px;
+		}
+
+		textarea::placeholder {
+			color: hsl(192, 2%, 70%);
+		}
+
+		button {
+			border: none;
+			border-radius: 5px;
+			padding: 15px;
+			color: white;
+			cursor: pointer;
+			display: inline-block;
+			background-color: #43baf4;
+			/* Blue */
+			text-align: center;
+			text-decoration: none;
+			left: 50%;
+		}
+	</style>
 </head>
-<body>
-	<form action="/" method="POST" enctype="multipart/form-data">
-                <div>
-			<label for="contents"></label>
-			<input placeholder="Contents" id="contents" size="50" />
-		</div>
-		<div>
-			<button>Paste</button>
-		</div>
-	</form>
 
+<body>
+		<form action="/" method="POST" enctype="multipart/form-data">
+			<textarea placeholder="Paste your text here...." rows="40" name="contents" cols="200" style="width: 100%; height: 100%; resize: none;"></textarea>
+			<br>
+			<button type="submit">Paste</button>
+		</form>
 </body>
+
 </html>
