@@ -51,7 +51,6 @@ async fn submit(
 ) -> Result<(axum::http::StatusCode, axum::http::HeaderMap, String), Error> {
     let mut data = String::new();
     while let Some(field) = multipart.0.next_field().await? {
-        debug!("{:?}", field);
         if field.name().ok_or(Error::FieldInvalid)? == "contents" {
             data = field.text().await?;
             break;
@@ -110,10 +109,23 @@ async fn getpaste(
         axum::http::header::CONTENT_TYPE,
         axum::http::header::HeaderValue::from_static("text/html"),
     );
+    let contents = res.contents.ok_or(Error::InternalError)?.replace("\r\n", "<br>").replace("\n", "<br>");
+    #[cfg(not(debug_assertions))]
+    let header = include_str!("./paste_head.html").to_string();
+    #[cfg(debug_assertions)]
+    let header = tokio::fs::read_to_string("./src/paste_head.html")
+        .await
+        .expect("Program is in debug mode and the header file was not found!");
+    #[cfg(not(debug_assertions))]
+    let footer = include_str!("./paste_foot.html").to_string();
+    #[cfg(debug_assertions)]
+    let footer = tokio::fs::read_to_string("./src/paste_foot.html")
+        .await
+        .expect("Program is in debug mode and the header file was not found!");
     Ok((
         axum::http::StatusCode::OK,
         headers,
-        res.contents.ok_or(Error::InternalError)?,
+        format!("{}{}{}", header, contents, footer),
     ))
 }
 
