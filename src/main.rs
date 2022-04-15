@@ -56,6 +56,7 @@ async fn submit(
             break;
         }
     }
+
     let persistence_length = chrono::Duration::weeks(1);
     let expires = chrono::offset::Local::now()
         .checked_add_signed(persistence_length)
@@ -66,9 +67,16 @@ async fn submit(
     );
     let db = DB.get().ok_or_else(|| Error::NoDb)?;
     // TODO check if paste already exists
-    query!("INSERT INTO pastes VALUES ($1, $2, $3)", key, data, expires)
-        .execute(db)
-        .await?;
+    let contents = html_escape::encode_text(&data);
+    query!(
+        "INSERT INTO pastes VALUES ($1, $2, $3)",
+        key,
+        &contents,
+        expires
+    )
+    .execute(db)
+    .await?;
+
     let mut headers = axum::http::HeaderMap::new();
     headers.insert(
         axum::http::header::LOCATION,
@@ -99,7 +107,7 @@ async fn getpaste(
             return Ok((
                 axum::http::StatusCode::NOT_FOUND,
                 headers,
-                include_str!("404.html").to_string(),
+                include_str!("./404.html").to_string(),
             ));
         }
         Err(e) => return Err(Error::Sqlx(e)),
@@ -109,23 +117,19 @@ async fn getpaste(
         axum::http::header::CONTENT_TYPE,
         axum::http::header::HeaderValue::from_static("text/html"),
     );
-    let contents = res.contents.ok_or(Error::InternalError)?.replace("\r\n", "<br>").replace("\n", "<br>");
+    let contents = res.contents.ok_or(Error::InternalError)?;
     #[cfg(not(debug_assertions))]
     let header = include_str!("./paste_head.html").to_string();
     #[cfg(debug_assertions)]
     let header = tokio::fs::read_to_string("./src/paste_head.html")
         .await
         .expect("Program is in debug mode and the header file was not found!");
-    #[cfg(not(debug_assertions))]
-    let footer = include_str!("./paste_foot.html").to_string();
-    #[cfg(debug_assertions)]
-    let footer = tokio::fs::read_to_string("./src/paste_foot.html")
-        .await
-        .expect("Program is in debug mode and the header file was not found!");
+    // This has both \n and \r\n to normalize for HTTP weirdness
+    let html_contents = contents.replace("\r\n", "<br>").replace("\n", "<br>");
     Ok((
         axum::http::StatusCode::OK,
         headers,
-        format!("{}{}{}", header, contents, footer),
+        format!("{}{}</div></body></html>", header, html_contents),
     ))
 }
 
@@ -143,7 +147,7 @@ async fn delete_expired() {
             Ok(_) => {}
             Err(e) => tracing::error!("Error deleting expired pastes: {}", e),
         };
-        tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
     }
 }
 
@@ -194,7 +198,7 @@ impl axum::response::IntoResponse for Error {
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             ),
             Error::InvalidHeaderValue(_) => (
-                "Invalid redirect value (this should be impossible".into(),
+                "Invalid redirect value (this should be impossible)".into(),
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             ),
             Error::Sqlx(_) => (
@@ -206,7 +210,7 @@ impl axum::response::IntoResponse for Error {
                 axum::http::StatusCode::BAD_REQUEST,
             ),
         };
-        error!("{:?}", self);
+        warn!("{:?}", self);
         axum::response::Response::builder()
             .status(status)
             .body(axum::body::boxed(axum::body::Full::from(body)))

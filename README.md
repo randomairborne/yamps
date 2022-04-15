@@ -1,3 +1,2 @@
 # YAMPS
-basic paste site
-still needs html
+Fairly simple pastebin site. Index file, 404 page, and paste header customizable.
