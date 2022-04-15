@@ -1,3 +1,49 @@
 {
-  "db": "PostgreSQL"
+  "db": "PostgreSQL",
+  "a6245a22a587309b573443c4f276e0185e44f7c69142251a6789d907152c7e36": {
+    "query": "SELECT contents FROM pastes WHERE key = $1",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "contents",
+          "type_info": "Text"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Text"
+        ]
+      },
+      "nullable": [
+        true
+      ]
+    }
+  },
+  "df784cc897888565ae0f18ce99409601be0c028a69b656e281cde88062b13720": {
+    "query": "DELETE FROM pastes WHERE expires < $1",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Timestamptz"
+        ]
+      },
+      "nullable": []
+    }
+  },
+  "ea9467059f2e7380dba398afdb14af1002874284309611970ea522db89452b66": {
+    "query": "INSERT INTO pastes VALUES ($1, $2, $3)",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Varchar",
+          "Text",
+          "Timestamptz"
+        ]
+      },
+      "nullable": []
+    }
+  }
 }
