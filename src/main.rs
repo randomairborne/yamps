@@ -1,9 +1,7 @@
-// TODO RATELIMITS
-
 use std::sync::Arc;
 
 use axum::{
-    extract::{Multipart, Path, TypedHeader},
+    extract::{ConnectInfo, Multipart, Path, TypedHeader},
     headers::ContentLength,
     routing::get,
 };
@@ -25,7 +23,7 @@ struct Config {
 #[derive(Clone, Debug)]
 struct State {
     config: Config,
-    db: sqlx::PgPool
+    db: sqlx::PgPool,
 }
 
 struct Cache {
@@ -38,8 +36,15 @@ struct Cache {
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_env("LOG"))
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::builder()
+                .with_env_var("LOG")
+                .with_default_directive(tracing_subscriber::filter::LevelFilter::INFO.into())
+                .from_env()
+                .unwrap(),
+        )
         .init();
+
     let cfg_path = std::env::args()
         .nth(1)
         .unwrap_or_else(|| String::from("./config.toml"));
@@ -56,6 +61,8 @@ async fn main() {
         .await
         .expect("Failed to connect to database!");
     migrate!("./migrations").run(&pool).await.unwrap();
+    let ratelimits: dashmap::DashMap<String, chrono::DateTime<chrono::Local>> =
+        dashmap::DashMap::new();
     let state = State {
         config: config.clone(),
         db: pool,
@@ -72,8 +79,16 @@ async fn main() {
     let app = axum::Router::new()
         .route(
             "/",
-            get(root).post(move |typedheader, multipart| {
-                submit(typedheader, multipart, add_state, add_cache)
+            get(root).post(move |typedheader, multipart, headers, addr| {
+                submit(
+                    typedheader,
+                    multipart,
+                    headers,
+                    addr,
+                    add_state,
+                    add_cache,
+                    ratelimits,
+                )
             }),
         )
         .route(
@@ -84,7 +99,7 @@ async fn main() {
     tokio::spawn(async move { clear_cache(cache, config.cache).await });
     warn!("Listening on http://0.0.0.0:{} (http)", config.port);
     axum::Server::bind(&std::net::SocketAddr::from(([0, 0, 0, 0], config.port)))
-        .serve(app.into_make_service())
+        .serve(app.into_make_service_with_connect_info::<std::net::SocketAddr>())
         .await
         .expect("Failed to bind to address, is something else using the port?");
 }
@@ -94,9 +109,27 @@ axum_static_macro::static_file!(root, "index.html", axum_static_macro::content_t
 async fn submit(
     TypedHeader(length): TypedHeader<ContentLength>,
     mut multipart: Multipart,
+    headers: axum::headers::HeaderMap,
+    ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
     state: State,
     cache: Arc<Cache>,
+    ratelimits: dashmap::DashMap<String, chrono::DateTime<chrono::Local>>,
 ) -> Result<(axum::http::StatusCode, axum::http::HeaderMap, String), Error> {
+    println!("{:?}", ratelimits);
+    println!("remote SocketAddr: {}", addr.ip());
+    if let Some(rl) = ratelimits.get(&addr.ip().to_string()) {
+        println!("{:?}", rl.value());
+        let last_paste = rl.value();
+        if let Some(next_paste) =
+            chrono::offset::Local::now().checked_add_signed(chrono::Duration::seconds(30))
+        {
+            if last_paste < &next_paste {
+                return Err(Error::RateLimited);
+            }
+        }
+    }
+    ratelimits.insert(addr.ip().to_string(), chrono::offset::Local::now());
+    println!("{:?}", ratelimits);
     if length.0 > state.config.size_limit.unwrap_or(1024) * 1024 {
         return Ok((
             axum::http::StatusCode::PAYLOAD_TOO_LARGE,
@@ -186,6 +219,7 @@ async fn getpaste(
     let mut context = tera::Context::new();
     context.insert("dmca_email", &state.config.dmca_email);
     context.insert("paste_contents", &contents);
+    context.insert("id", &id);
     let final_contents = tera.render("paste.html", &context)?;
     let mut headers = axum::http::HeaderMap::new();
     headers.insert(
@@ -240,10 +274,14 @@ enum Error {
     TimeError,
     FieldInvalid,
     InternalError,
+    ToStr(axum::http::header::ToStrError),
     InvalidHeaderValue(axum::http::header::InvalidHeaderValue),
     Sqlx(sqlx::Error),
     Multipart(axum::extract::multipart::MultipartError),
     TemplatingError(tera::Error),
+
+    // Errors that might happen to a normal user
+    RateLimited,
 }
 
 impl From<axum::http::header::InvalidHeaderValue> for Error {
@@ -270,6 +308,12 @@ impl From<tera::Error> for Error {
     }
 }
 
+impl From<axum::http::header::ToStrError> for Error {
+    fn from(e: axum::http::header::ToStrError) -> Self {
+        Self::ToStr(e)
+    }
+}
+
 impl axum::response::IntoResponse for Error {
     fn into_response(self) -> axum::response::Response {
         let (body, status): (std::borrow::Cow<str>, axum::http::StatusCode) = match self {
@@ -286,6 +330,10 @@ impl axum::response::IntoResponse for Error {
                 "Unknown internal error".into(),
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             ),
+            Error::ToStr(_) => (
+                "Error converting header to string".into(),
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            ),
             Error::InvalidHeaderValue(_) => (
                 "Invalid redirect value (this should be impossible)".into(),
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
@@ -294,10 +342,13 @@ impl axum::response::IntoResponse for Error {
                 "Database lookup failed".into(),
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             ),
-
             Error::TemplatingError(_) => (
                 "Templating library error".into(),
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            ),
+            Error::RateLimited => (
+                "You have been ratelimited! Try again in a few minutes.".into(),
+                axum::http::StatusCode::TOO_MANY_REQUESTS,
             ),
         };
         if status == axum::http::StatusCode::INTERNAL_SERVER_ERROR {
@@ -305,9 +356,10 @@ impl axum::response::IntoResponse for Error {
         } else {
             warn!("{:?}", self);
         }
+        let body_and_error = include_str!("./error.html").replace("{{ error }}", &body);
         axum::response::Response::builder()
             .status(status)
-            .body(axum::body::boxed(axum::body::Full::from(body)))
+            .body(axum::body::boxed(axum::body::Full::from(body_and_error)))
             .unwrap()
     }
 }

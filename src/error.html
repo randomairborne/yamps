@@ -6,38 +6,31 @@
     <link href="https://fonts.googleapis.com/css?family=JetBrains+Mono&display=swap" rel="stylesheet" />
     <meta charset="UTF-8">
     <meta name="robots" content="noindex">
-    <title>Paste {{ id }}</title>
+    <title>Error</title>
     <style>
         body,
         html {
-            background: #44484a;
-            font-family: "JetBrains Mono", monospace;
+            margin: 0;
+            padding: 0;
+            height: 100%;
         }
 
-        .dmca {
+        body {
+            background: #44484a;
             display: flex;
-            justify-content: center;
-            padding: 1%;
-        }
-        .paste {
-            margin: 5%;
             justify-content: center;
             align-items: center;
             color: #43baf4;
+            font-family: "JetBrains Mono", monospace;
         }
 
-        a {
-            color: #43baf4;
-        }
     </style>
 </head>
 
 <body>
-    <div class="dmca">
-        <a href="mailto:{{ dmca_email }}">DMCA requests</a>
-    </div>
-    <div class="paste">
-        {{ paste_contents }}
+    <div>
+        <h1>{{ error }}</h1>
     </div>
 </body>
+
 </html>
