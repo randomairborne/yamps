@@ -1,3 +1,5 @@
+// TODO RATELIMITS
+
 use std::sync::Arc;
 
 use axum::{
@@ -23,7 +25,7 @@ struct Config {
 #[derive(Clone, Debug)]
 struct State {
     config: Config,
-    db: sqlx::PgPool,
+    db: sqlx::PgPool
 }
 
 struct Cache {
@@ -44,6 +46,10 @@ async fn main() {
 
     let config_string = std::fs::read_to_string(&cfg_path).expect("Failed to read config");
     let config = toml::from_str::<Config>(&config_string).expect("Failed to parse config");
+
+    let mut tera = tera::Tera::default();
+    tera.add_raw_template("paste.html", include_str!("./paste.html"))
+        .expect("Failed to load paste.html as template");
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(5)
         .connect(&config.db)
@@ -72,7 +78,7 @@ async fn main() {
         )
         .route(
             "/:path",
-            get(move |id| getpaste(id, view_state, view_cache)),
+            get(move |id| getpaste(id, view_state, view_cache, tera)),
         );
     tokio::spawn(async move { delete_expired(&deleter_state.db).await });
     tokio::spawn(async move { clear_cache(cache, config.cache).await });
@@ -115,8 +121,7 @@ async fn submit(
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz1234567890",
     );
     let db = &state.db;
-    // TODO check if paste already exists
-    let contents = html_escape::encode_text(&data);
+    let contents = tera::escape_html(&data);
     query!(
         "INSERT INTO pastes VALUES ($1, $2, $3)",
         key,
@@ -128,7 +133,7 @@ async fn submit(
     if let Some(_) = state.config.cache {
         let mut heap = cache.expiries.write();
 
-        cache.data.insert(key.clone(), contents.into_owned());
+        cache.data.insert(key.clone(), contents);
         heap.push((chrono::offset::Local::now(), key.clone()));
     }
 
@@ -148,13 +153,13 @@ async fn getpaste(
     Path(id): Path<String>,
     state: State,
     cache: Arc<Cache>,
+    tera: tera::Tera,
 ) -> Result<(axum::http::StatusCode, axum::http::HeaderMap, String), Error> {
-    let mut contents = String::new();
-    if let Some(_) = state.config.cache {
-        if let Some(item) = cache.data.get(&id) {
-            contents = item.to_string();
-            trace!("Cache hit!");
-        }
+    let contents: String;
+    // TODO replace this with let chaining when rust 1.62 is released
+    if let (Some(_), Some(item)) = (state.config.cache, cache.data.get(&id)) {
+        contents = item.value().to_string();
+        trace!("Cache hit!");
     } else {
         let db = &state.db;
         let res = match query!("SELECT contents FROM pastes WHERE key = $1", id)
@@ -178,22 +183,15 @@ async fn getpaste(
         };
         contents = res.contents.ok_or(Error::InternalError)?;
     };
+    let mut context = tera::Context::new();
+    context.insert("dmca_email", &state.config.dmca_email);
+    context.insert("paste_contents", &contents);
+    let final_contents = tera.render("paste.html", &context)?;
     let mut headers = axum::http::HeaderMap::new();
     headers.insert(
         axum::http::header::CONTENT_TYPE,
         axum::http::header::HeaderValue::from_static("text/html"),
     );
-    #[cfg(not(debug_assertions))]
-    let html = include_str!("./paste.html").to_string();
-    #[cfg(debug_assertions)]
-    let html = tokio::fs::read_to_string("./src/paste.html")
-        .await
-        .expect("Program is in debug mode and the paste.html file was not found!");
-    // This has both \n and \r\n to normalize for HTTP weirdness
-    let clean_contents = contents.replace("\r\n", "<br>").replace("\n", "<br>");
-    let final_contents = html
-        .replace("%{dmca_email}%", &state.config.dmca_email)
-        .replace("%{paste_contents}%", &clean_contents);
     Ok((axum::http::StatusCode::OK, headers, final_contents))
 }
 
@@ -212,23 +210,23 @@ async fn delete_expired(db: &sqlx::PgPool) {
     }
 }
 
+// This was O(n^n), thanks to tazz4843 for fixing that
 async fn clear_cache(cache: Arc<Cache>, max: Option<usize>) {
     if let Some(max_size) = max {
+        let max_size = max_size * 1_048_576;
         loop {
             debug!("Clearing cache...");
-            let mut heap = cache.expiries.write();
-            loop {
-                let mut size: usize = 0;
-                for item in cache.data.iter() {
-                    size += item.value().capacity();
-                }
-                if size > max_size * 1_048_576 {
-                    if let Some(item) = heap.peek() {
-                        cache.data.remove(&item.1);
-                        heap.pop();
-                    }
-                } else {
-                    break;
+            let mut size: usize = 0;
+            for item in cache.data.iter() {
+                size += item.value().capacity();
+            }
+            while size > max_size {
+                let heap = cache.expiries.upgradable_read();
+                if let Some(item) = heap.peek() {
+                    size -= item.1.capacity();
+                    cache.data.remove(&item.1);
+                    let mut rwheap = parking_lot::RwLockUpgradableReadGuard::upgrade(heap);
+                    rwheap.pop();
                 }
             }
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
@@ -245,6 +243,7 @@ enum Error {
     InvalidHeaderValue(axum::http::header::InvalidHeaderValue),
     Sqlx(sqlx::Error),
     Multipart(axum::extract::multipart::MultipartError),
+    TemplatingError(tera::Error),
 }
 
 impl From<axum::http::header::InvalidHeaderValue> for Error {
@@ -265,12 +264,22 @@ impl From<axum::extract::multipart::MultipartError> for Error {
     }
 }
 
+impl From<tera::Error> for Error {
+    fn from(e: tera::Error) -> Self {
+        Self::TemplatingError(e)
+    }
+}
+
 impl axum::response::IntoResponse for Error {
     fn into_response(self) -> axum::response::Response {
         let (body, status): (std::borrow::Cow<str>, axum::http::StatusCode) = match self {
             Error::TimeError => ("Bad request".into(), axum::http::StatusCode::BAD_REQUEST),
             Error::FieldInvalid => (
                 "HTTP field invalid".into(),
+                axum::http::StatusCode::BAD_REQUEST,
+            ),
+            Error::Multipart(_) => (
+                "MultiPartFormData invalid".into(),
                 axum::http::StatusCode::BAD_REQUEST,
             ),
             Error::InternalError => (
@@ -285,12 +294,17 @@ impl axum::response::IntoResponse for Error {
                 "Database lookup failed".into(),
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             ),
-            Error::Multipart(_) => (
-                "MultiPartFormData invalid".into(),
-                axum::http::StatusCode::BAD_REQUEST,
+
+            Error::TemplatingError(_) => (
+                "Templating library error".into(),
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             ),
         };
-        warn!("{:?}", self);
+        if status == axum::http::StatusCode::INTERNAL_SERVER_ERROR {
+            error!("{:#?}", self);
+        } else {
+            warn!("{:?}", self);
+        }
         axum::response::Response::builder()
             .status(status)
             .body(axum::body::boxed(axum::body::Full::from(body)))
