@@ -1,6 +1,10 @@
-use axum::extract::{ContentLengthLimit, Multipart, Path};
-use axum::routing::get;
-use axum::Extension;
+use std::sync::Arc;
+
+use axum::{
+    extract::{Multipart, Path, TypedHeader},
+    headers::ContentLength,
+    routing::get,
+};
 
 #[macro_use]
 extern crate sqlx;
@@ -12,12 +16,21 @@ struct Config {
     db: String,
     port: u16,
     dmca_email: String,
+    size_limit: Option<u64>,
+    cache: Option<usize>,
 }
 
 #[derive(Clone, Debug)]
 struct State {
     config: Config,
     db: sqlx::PgPool,
+}
+
+struct Cache {
+    data: dashmap::DashMap<String, String>,
+    expiries: parking_lot::RwLock<
+        std::collections::BinaryHeap<(chrono::DateTime<chrono::Local>, String)>,
+    >,
 }
 
 #[tokio::main]
@@ -41,16 +54,28 @@ async fn main() {
         config: config.clone(),
         db: pool,
     };
-    let app_state = state.clone();
+    let cache: Arc<Cache> = Arc::new(Cache {
+        data: dashmap::DashMap::new(),
+        expiries: parking_lot::RwLock::new(std::collections::BinaryHeap::new()),
+    });
+    let add_state = state.clone();
+    let view_state = state.clone();
     let deleter_state = state.clone();
+    let add_cache = cache.clone();
+    let view_cache = cache.clone();
     let app = axum::Router::new()
         .route(
             "/",
-            get(root).post(move |multipart| submit(multipart, app_state)),
+            get(root).post(move |typedheader, multipart| {
+                submit(typedheader, multipart, add_state, add_cache)
+            }),
         )
-        .route("/:path", get(getpaste))
-        .layer(Extension(state));
+        .route(
+            "/:path",
+            get(move |id| getpaste(id, view_state, view_cache)),
+        );
     tokio::spawn(async move { delete_expired(&deleter_state.db).await });
+    tokio::spawn(async move { clear_cache(cache, config.cache).await });
     warn!("Listening on http://0.0.0.0:{} (http)", config.port);
     axum::Server::bind(&std::net::SocketAddr::from(([0, 0, 0, 0], config.port)))
         .serve(app.into_make_service())
@@ -61,11 +86,20 @@ async fn main() {
 axum_static_macro::static_file!(root, "index.html", axum_static_macro::content_types::HTML);
 
 async fn submit(
-    mut multipart: ContentLengthLimit<Multipart, 50_000_000>,
+    TypedHeader(length): TypedHeader<ContentLength>,
+    mut multipart: Multipart,
     state: State,
+    cache: Arc<Cache>,
 ) -> Result<(axum::http::StatusCode, axum::http::HeaderMap, String), Error> {
+    if length.0 > state.config.size_limit.unwrap_or(1024) * 1024 {
+        return Ok((
+            axum::http::StatusCode::PAYLOAD_TOO_LARGE,
+            axum::http::HeaderMap::new(),
+            "Paste too long!".to_string(),
+        ));
+    }
     let mut data = String::new();
-    while let Some(field) = multipart.0.next_field().await? {
+    while let Some(field) = multipart.next_field().await? {
         if field.name().ok_or(Error::FieldInvalid)? == "contents" {
             data = field.text().await?;
             break;
@@ -91,6 +125,12 @@ async fn submit(
     )
     .execute(db)
     .await?;
+    if let Some(_) = state.config.cache {
+        let mut heap = cache.expiries.write();
+
+        cache.data.insert(key.clone(), contents.into_owned());
+        heap.push((chrono::offset::Local::now(), key.clone()));
+    }
 
     let mut headers = axum::http::HeaderMap::new();
     headers.insert(
@@ -104,37 +144,45 @@ async fn submit(
     ))
 }
 
-// TODO implement caching
 async fn getpaste(
     Path(id): Path<String>,
-    Extension(state): Extension<State>,
+    state: State,
+    cache: Arc<Cache>,
 ) -> Result<(axum::http::StatusCode, axum::http::HeaderMap, String), Error> {
-    let db = &state.db;
-    let res = match query!("SELECT contents FROM pastes WHERE key = $1", id)
-        .fetch_one(db)
-        .await
-    {
-        Ok(data) => data,
-        Err(sqlx::Error::RowNotFound) => {
-            let mut headers = axum::http::HeaderMap::new();
-            headers.insert(
-                axum::http::header::CONTENT_TYPE,
-                axum::http::header::HeaderValue::from_static("text/html"),
-            );
-            return Ok((
-                axum::http::StatusCode::NOT_FOUND,
-                headers,
-                include_str!("./404.html").to_string(),
-            ));
+    let mut contents = String::new();
+    if let Some(_) = state.config.cache {
+        if let Some(item) = cache.data.get(&id) {
+            contents = item.to_string();
+            trace!("Cache hit!");
         }
-        Err(e) => return Err(Error::Sqlx(e)),
+    } else {
+        let db = &state.db;
+        let res = match query!("SELECT contents FROM pastes WHERE key = $1", id)
+            .fetch_one(db)
+            .await
+        {
+            Ok(data) => data,
+            Err(sqlx::Error::RowNotFound) => {
+                let mut headers = axum::http::HeaderMap::new();
+                headers.insert(
+                    axum::http::header::CONTENT_TYPE,
+                    axum::http::header::HeaderValue::from_static("text/html"),
+                );
+                return Ok((
+                    axum::http::StatusCode::NOT_FOUND,
+                    headers,
+                    include_str!("./404.html").to_string(),
+                ));
+            }
+            Err(e) => return Err(Error::Sqlx(e)),
+        };
+        contents = res.contents.ok_or(Error::InternalError)?;
     };
     let mut headers = axum::http::HeaderMap::new();
     headers.insert(
         axum::http::header::CONTENT_TYPE,
         axum::http::header::HeaderValue::from_static("text/html"),
     );
-    let contents = res.contents.ok_or(Error::InternalError)?;
     #[cfg(not(debug_assertions))]
     let html = include_str!("./paste.html").to_string();
     #[cfg(debug_assertions)]
@@ -161,6 +209,30 @@ async fn delete_expired(db: &sqlx::PgPool) {
             Err(e) => tracing::error!("Error deleting expired pastes: {}", e),
         };
         tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+    }
+}
+
+async fn clear_cache(cache: Arc<Cache>, max: Option<usize>) {
+    if let Some(max_size) = max {
+        loop {
+            debug!("Clearing cache...");
+            let mut heap = cache.expiries.write();
+            loop {
+                let mut size: usize = 0;
+                for item in cache.data.iter() {
+                    size += item.value().capacity();
+                }
+                if size > max_size * 1_048_576 {
+                    if let Some(item) = heap.peek() {
+                        cache.data.remove(&item.1);
+                        heap.pop();
+                    }
+                } else {
+                    break;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        }
     }
 }
 
