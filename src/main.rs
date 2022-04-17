@@ -17,6 +17,7 @@ struct Config {
     port: u16,
     dmca_email: String,
     size_limit: Option<u64>,
+    ratelimit: Option<u64>,
     cache: Option<usize>,
 }
 
@@ -30,7 +31,7 @@ struct Cache {
     data: dashmap::DashMap<String, String>,
     expiries: parking_lot::RwLock<
         std::collections::BinaryHeap<(chrono::DateTime<chrono::Local>, String)>,
-    >,
+    >
 }
 
 #[tokio::main]
@@ -61,8 +62,8 @@ async fn main() {
         .await
         .expect("Failed to connect to database!");
     migrate!("./migrations").run(&pool).await.unwrap();
-    let ratelimits: dashmap::DashMap<String, chrono::DateTime<chrono::Local>> =
-        dashmap::DashMap::new();
+    let ratelimits: Arc<dashmap::DashMap<String, std::time::Instant>> =
+        Arc::new(dashmap::DashMap::new());
     let state = State {
         config: config.clone(),
         db: pool,
@@ -113,29 +114,30 @@ async fn submit(
     ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
     state: State,
     cache: Arc<Cache>,
-    ratelimits: dashmap::DashMap<String, chrono::DateTime<chrono::Local>>,
+    ratelimits: Arc<dashmap::DashMap<String, std::time::Instant>>,
 ) -> Result<(axum::http::StatusCode, axum::http::HeaderMap, String), Error> {
-    println!("{:?}", ratelimits);
-    println!("remote SocketAddr: {}", addr.ip());
-    if let Some(rl) = ratelimits.get(&addr.ip().to_string()) {
-        println!("{:?}", rl.value());
-        let last_paste = rl.value();
-        if let Some(next_paste) =
-            chrono::offset::Local::now().checked_add_signed(chrono::Duration::seconds(30))
-        {
-            if last_paste < &next_paste {
-                return Err(Error::RateLimited);
+    if let Some(wait_time) = state.config.ratelimit {
+        let remote: String;
+        if let Some(remote_ip) = headers.get("X_REAL_IP") {
+            remote = remote_ip.to_str()?.to_string();
+        } else {
+            remote = addr.ip().to_string()
+        }
+        if let Some(rl) = ratelimits.get(&remote) {
+            let last_paste = rl.value();
+            if let Some(time_until_unlimited) = std::time::Duration::from_secs(wait_time)
+                .checked_sub(last_paste.elapsed())
+                .map(|x| x.as_secs())
+            {
+                return Err(Error::RateLimited(time_until_unlimited));
             }
         }
+        ratelimits.insert(remote, std::time::Instant::now());
     }
-    ratelimits.insert(addr.ip().to_string(), chrono::offset::Local::now());
+
     println!("{:?}", ratelimits);
     if length.0 > state.config.size_limit.unwrap_or(1024) * 1024 {
-        return Ok((
-            axum::http::StatusCode::PAYLOAD_TOO_LARGE,
-            axum::http::HeaderMap::new(),
-            "Paste too long!".to_string(),
-        ));
+        return Err(Error::PasteTooLarge);
     }
     let mut data = String::new();
     while let Some(field) = multipart.next_field().await? {
@@ -165,11 +167,9 @@ async fn submit(
     .await?;
     if let Some(_) = state.config.cache {
         let mut heap = cache.expiries.write();
-
         cache.data.insert(key.clone(), contents);
         heap.push((chrono::offset::Local::now(), key.clone()));
     }
-
     let mut headers = axum::http::HeaderMap::new();
     headers.insert(
         axum::http::header::LOCATION,
@@ -201,21 +201,17 @@ async fn getpaste(
         {
             Ok(data) => data,
             Err(sqlx::Error::RowNotFound) => {
-                let mut headers = axum::http::HeaderMap::new();
-                headers.insert(
-                    axum::http::header::CONTENT_TYPE,
-                    axum::http::header::HeaderValue::from_static("text/html"),
-                );
-                return Ok((
-                    axum::http::StatusCode::NOT_FOUND,
-                    headers,
-                    include_str!("./404.html").to_string(),
-                ));
+                return Err(Error::NotFound);
             }
             Err(e) => return Err(Error::Sqlx(e)),
         };
         contents = res.contents.ok_or(Error::InternalError)?;
     };
+    if let Some(_) = state.config.cache {
+        let mut heap = cache.expiries.write();
+        cache.data.insert(id.clone(), contents);
+        heap.push((chrono::offset::Local::now(), id.clone()));
+    }
     let mut context = tera::Context::new();
     context.insert("dmca_email", &state.config.dmca_email);
     context.insert("paste_contents", &contents);
@@ -226,6 +222,7 @@ async fn getpaste(
         axum::http::header::CONTENT_TYPE,
         axum::http::header::HeaderValue::from_static("text/html"),
     );
+
     Ok((axum::http::StatusCode::OK, headers, final_contents))
 }
 
@@ -281,7 +278,9 @@ enum Error {
     TemplatingError(tera::Error),
 
     // Errors that might happen to a normal user
-    RateLimited,
+    RateLimited(u64),
+    PasteTooLarge,
+    NotFound,
 }
 
 impl From<axum::http::header::InvalidHeaderValue> for Error {
@@ -346,8 +345,20 @@ impl axum::response::IntoResponse for Error {
                 "Templating library error".into(),
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             ),
-            Error::RateLimited => (
-                "You have been ratelimited! Try again in a few minutes.".into(),
+            Error::RateLimited(seconds) => (
+                format!(
+                    "You have been ratelimited! Try again in {} seconds.",
+                    seconds
+                )
+                .into(),
+                axum::http::StatusCode::TOO_MANY_REQUESTS,
+            ),
+            Error::PasteTooLarge => (
+                "Paste too large!".into(),
+                axum::http::StatusCode::TOO_MANY_REQUESTS,
+            ),
+            Error::NotFound => (
+                include_str!("./404.html").into(),
                 axum::http::StatusCode::TOO_MANY_REQUESTS,
             ),
         };
@@ -359,6 +370,7 @@ impl axum::response::IntoResponse for Error {
         let body_and_error = include_str!("./error.html").replace("{{ error }}", &body);
         axum::response::Response::builder()
             .status(status)
+            .header("Content-Type", "text/html")
             .body(axum::body::boxed(axum::body::Full::from(body_and_error)))
             .unwrap()
     }

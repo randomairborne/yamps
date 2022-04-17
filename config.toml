@@ -3,5 +3,7 @@ port = 8000
 dmca_email = "valk@randomairborne.dev"
 # Size limit for pastes, in kilobytes
 size_limit = 1024
+# Number of seconds per paste
+ratelimit = 30
 # This can take a lot of RAM, as such it is optional. Having it disabled hits the database every request. This is the maximum RAM it can use- it will remove the oldest pastes when this limit is reached
 cache = 1024
