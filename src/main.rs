@@ -206,12 +206,12 @@ async fn getpaste(
             Err(e) => return Err(Error::Sqlx(e)),
         };
         contents = res.contents.ok_or(Error::InternalError)?;
+        if let Some(_) = state.config.cache {
+            let mut heap = cache.expiries.write();
+            cache.data.insert(id.clone(), contents.clone());
+            heap.push((chrono::offset::Local::now(), id.clone()));
+        }
     };
-    if let Some(_) = state.config.cache {
-        let mut heap = cache.expiries.write();
-        cache.data.insert(id.clone(), contents);
-        heap.push((chrono::offset::Local::now(), id.clone()));
-    }
     let mut context = tera::Context::new();
     context.insert("dmca_email", &state.config.dmca_email);
     context.insert("paste_contents", &contents);
