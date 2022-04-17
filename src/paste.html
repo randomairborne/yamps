@@ -20,6 +20,20 @@
             padding: 1%;
 			font-size: 200%;
         }
+        .btn {
+            text-decoration: none;
+            color: #fff;
+            margin: 12px;
+            padding: 8px 24px;
+            border: 1px solid #222;
+            border-radius: 4px;
+            transition: background-color 250ms ease-in-out;
+            font-size: 18px;
+            float: left;
+        }
+        .btn:hover {background-color: #111}
+        .btn:active {background-color: #222}
+
         .paste {
             margin: 1%;
             justify-content: center;
@@ -31,7 +45,7 @@
 
 <body>
     <div class="dmca">
-        <a href="mailto:{{ dmca_email }}">DMCA requests</a>
+        <a href="mailto:{{ dmca_email }}" class="btn">DMCA requests</a>
     </div>
     <div class="paste">
         {{ paste_contents }}
