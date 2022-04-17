@@ -8,20 +8,21 @@
 	<title>Paste</title>
 	<style>
 		body {
-			background: #44484a;
+			background: #000;
 			display: flex;
 			justify-content: center;
 			align-items: center;
-			color: #43baf4;
+			color: #fff;
 			font-family: "JetBrains Mono", monospace;
 		}
 
 		textarea {
-			background: hsl(192, 2%, 40%);
-			border: #1b8b77;
-			color: #ffffff;
-			padding: 15px;
-			border-radius: 2px;
+            box-sizing: border-box;
+			background: #000;
+			border: #222 solid 1px;
+			color: #fff;
+			padding: 7px;
+			border-radius: 8px;
 			resize: both;
 			width: 80vw;
 			height: 80vh;
@@ -29,24 +30,28 @@
 		}
 
 		textarea::placeholder {
-			color: hsl(192, 2%, 70%);
+			color: #eee;
 		}
 
 		button {
-			border: none;
 			border-radius: 5px;
 			padding: 15px;
-			color: white;
 			cursor: pointer;
 			display: inline-block;
-			background-color: #43baf4;
-			/* Blue */
+			background: #000;
+            color: #fff;
+            border: #222 solid 1px;
 			text-align: center;
 			text-decoration: none;
 			margin-left: 50%;
 			transform: translateX(-50%);
             font-size: 5vh;
+            transition: background-color 250ms linear;
 		}
+
+        button:hover {
+            background: #111;
+        }
 	</style>
 </head>
 
