@@ -12,6 +12,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
+use axum_static_macro::{content_types, static_file};
 use chrono::{DateTime, Local};
 use dashmap::DashMap;
 use parking_lot::RwLock;
@@ -122,7 +123,9 @@ async fn main() {
         .expect("Failed to bind to address, is something else using the port?");
 }
 
-axum_static_macro::static_file!(root, "index.html", axum_static_macro::content_types::HTML);
+static_file!(root, "index.html", content_types::HTML);
+
+static_file!(favicon, "favicon.ico", content_types::FAVICON);
 
 async fn submit(
     TypedHeader(length): TypedHeader<ContentLength>,
@@ -168,20 +171,25 @@ async fn submit(
     let expires = Local::now()
         .checked_add_signed(persistence_length)
         .ok_or(Error::TimeError)?;
-    let key = random_string::generate(
-        8,
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz1234567890",
-    );
     let db = &state.db;
     let contents = tera::escape_html(&data);
-    query!(
-        "INSERT INTO pastes VALUES ($1, $2, $3)",
-        key,
-        &contents,
-        expires
-    )
-    .execute(db)
-    .await?;
+    let key = loop {
+        let id = random_string::generate(
+            8,
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz1234567890",
+        );
+        if let Ok(_) = query!(
+            "INSERT INTO pastes VALUES ($1, $2, $3)",
+            id,
+            &contents,
+            expires
+        )
+        .execute(db)
+        .await
+        {
+            break id;
+        }
+    };
     if let Some(_) = state.config.cache {
         let mut heap = cache.expire_timestamps.write();
         cache.data.insert(key.clone(), contents);
