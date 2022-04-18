@@ -174,7 +174,7 @@ async fn submit(
         .checked_add_signed(persistence_length)
         .ok_or(Error::TimeError)?;
     let db = &state.db;
-    let contents = tera::escape_html(&data);
+    let contents = tera::escape_html(&data).replace("\r\n", "<br>").replace("\n", "<br>");
     let key = loop {
         let id = random_string::generate(
             8,
