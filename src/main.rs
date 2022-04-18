@@ -75,6 +75,7 @@ async fn main() {
     let mut tera = Tera::default();
     tera.add_raw_template("paste.html", include_str!("./paste.html"))
         .expect("Failed to load paste.html as template");
+    tera.autoescape_on(vec![]);
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(5)
         .connect(&config.db)
@@ -113,6 +114,10 @@ async fn main() {
         .route(
             "/:path",
             get(move |id| get_paste(id, view_state, view_cache, tera)),
+        )
+        .route(
+            "/favicon.ico",
+            get(|| async { (StatusCode::NO_CONTENT, "") }),
         );
     tokio::spawn(async move { delete_expired(&deleter_state.db).await });
     tokio::spawn(async move { clear_cache(cache, config.cache).await });
@@ -124,8 +129,6 @@ async fn main() {
 }
 
 static_file!(root, "index.html", content_types::HTML);
-
-static_file!(favicon, "favicon.ico", content_types::FAVICON);
 
 async fn submit(
     TypedHeader(length): TypedHeader<ContentLength>,
@@ -155,7 +158,6 @@ async fn submit(
         ratelimit_map.insert(remote, Instant::now());
     }
 
-    println!("{:?}", ratelimit_map);
     if length.0 > state.config.size_limit.unwrap_or(1024) * 1024 {
         return Err(Error::PasteTooLarge);
     }
