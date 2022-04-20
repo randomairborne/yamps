@@ -13,12 +13,15 @@
             background: #000;
             font-family: "JetBrains Mono", monospace;
         }
-
+        .center {
+            justify-content: center;
+            align-items: center;
+            display: flex;
+        }
         .menu {
             display: flex;
-            justify-content: center;
             padding: 1%;
-			font-size: 200%;
+   	    font-size: 200%;
         }
         .btn {
             text-decoration: none;
@@ -35,7 +38,8 @@
         .btn:active {background-color: #222}
 
         .paste {
-            margin: 1%;
+            margin-left: 1%;
+            margin-right: 1%;
             justify-content: center;
             align-items: center;
             color: #fff;
@@ -45,9 +49,11 @@
 </head>
 
 <body>
-    <div class="menu">
-        <a href="/" class="btn">New Paste</a>
-        <a href="mailto:{{ contact_email }}" class="btn">Contact</a>
+    <div class="center">
+        <div class="menu">
+            <a href="/" class="btn">New Paste</a>
+            <a href="mailto:{{ contact_email }}" class="btn">Contact</a>
+        </div>
     </div>
     <div class="paste">
         {{ paste_contents }}
