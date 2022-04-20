@@ -36,7 +36,7 @@ extern crate tracing;
 struct Config {
     db: String,
     port: u16,
-    dmca_email: String,
+    contact_email: String,
     size_limit: Option<u64>,
     ratelimit: Option<u64>,
     cache: Option<usize>,
@@ -236,7 +236,7 @@ async fn get_paste(
         }
     };
     let mut context = tera::Context::new();
-    context.insert("dmca_email", &state.config.dmca_email);
+    context.insert("contact_email", &state.config.contact_email);
     context.insert("paste_contents", &contents);
     context.insert("id", &id);
     let final_contents = tera.render("paste.html", &context)?;

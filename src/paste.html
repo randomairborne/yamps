@@ -1,6 +1,5 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
     <link href="https://fonts.googleapis.com/css?family=JetBrains+Mono&display=swap" rel="preload" as="style" />
     <link href="https://fonts.googleapis.com/css?family=JetBrains+Mono&display=swap" rel="stylesheet" />
@@ -15,7 +14,7 @@
             font-family: "JetBrains Mono", monospace;
         }
 
-        .dmca {
+        .menu {
             display: flex;
             justify-content: center;
             padding: 1%;
@@ -46,8 +45,9 @@
 </head>
 
 <body>
-    <div class="dmca">
-        <a href="mailto:{{ dmca_email }}" class="btn">DMCA requests</a>
+    <div class="menu">
+        <a href="/" class="btn">New Paste</a>
+        <a href="mailto:{{ contact_email }}" class="btn">Contact</a>
     </div>
     <div class="paste">
         {{ paste_contents }}

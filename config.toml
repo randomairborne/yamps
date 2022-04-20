@@ -1,6 +1,6 @@
 db = "postgres://yamps:password@localhost/yamps"
 port = 8000
-dmca_email = "valk@randomairborne.dev"
+contact_email = "valk@randomairborne.dev"
 # Size limit for pastes, in kilobytes
 size_limit = 1024
 # Number of seconds per paste
