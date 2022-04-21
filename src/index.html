@@ -12,6 +12,7 @@
 			background: #000;
 			display: flex;
 			justify-content: center;
+			text-align: center;
 			align-items: center;
 			color: #fff;
 			font-family: "JetBrains Mono", monospace;
@@ -44,8 +45,6 @@
             border: #222 solid 1px;
 			text-align: center;
 			text-decoration: none;
-			margin-left: 50%;
-			transform: translateX(-50%);
             font-size: 5vh;
             transition: background-color 250ms linear;
             margin-top: 20px;
@@ -62,8 +61,10 @@
 		<div class="wrapper">
 			<textarea placeholder="Paste your text here...." name="contents" rows="20" cols="50"></textarea>
 		</div>
-
 		<button type="submit">Paste</button>
+		<div class="wrapper">
+		<p>By clicking the above button, you consent to the use and publishing of the contents of the paste under GDPR.</p>
+	</div>
 	</form>
 </body>
 
